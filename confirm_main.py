@@ -1,101 +1,151 @@
 # confirm_main.py
-import logging
+import imaplib
+import email
 import time
-import sys
-import os
+import re
+from email.header import decode_header
 
-# Добавляем путь к текущей директории для импортов
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Аккаунты для подтверждения (те же что и для регистрации)
+ACCOUNTS = [
+    {
+        'email': 'tyistyapde80@outlook.com',
+        'password': 'RegbigOur33859',
+        'name': 'Pavel'
+    },
+    {
+        'email': 'toeenpory00@outlook.com',
+        'password': 'RegbigOur33859', 
+        'name': 'Ivan'
+    },
+    {
+        'email': 'lycaatest76@outlook.com',
+        'password': 'RegbigOur33859',
+        'name': 'Egor'
+    }
+]
 
-from account_manager import AccountManager
-from email_confirmer import EmailConfirmer
-
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('confirmation.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-def main():
-    """Основная функция для подтверждения email"""
+def check_email_imap(email_addr: str, password: str) -> list:
+    """Проверка почты через IMAP"""
     try:
-        logger.info("=== ЗАПУСК ПОДТВЕРЖДЕНИЯ EMAIL ===")
+        print(f"Проверка почты {email_addr}...")
+        mail = imaplib.IMAP4_SSL("outlook.office365.com")
+        mail.login(email_addr, password)
+        mail.select("inbox")
+
+        # Ищем все письма
+        status, messages = mail.search(None, 'ALL')
+        email_ids = messages[0].split()
         
-        # Инициализация менеджеров
-        account_manager = AccountManager("accounts.json")
-        confirmer = EmailConfirmer(account_manager)
+        emails_info = []
         
-        # Получаем аккаунты для подтверждения
-        accounts_to_confirm = account_manager.get_unconfirmed_accounts()
+        # Проверяем последние 10 писем
+        for email_id in email_ids[-10:]:
+            status, msg_data = mail.fetch(email_id, '(RFC822)')
+            
+            for response_part in msg_data:
+                if isinstance(response_part, tuple):
+                    msg = email.message_from_bytes(response_part[1])
+                    
+                    subject, encoding = decode_header(msg["Subject"])[0]
+                    if isinstance(subject, bytes):
+                        subject = subject.decode(encoding if encoding else 'utf-8')
+                    
+                    email_info = {
+                        'subject': subject,
+                        'from': msg.get("From"),
+                        'date': msg.get("Date")
+                    }
+                    
+                    # Получаем тело письма
+                    body = ""
+                    if msg.is_multipart():
+                        for part in msg.walk():
+                            content_type = part.get_content_type()
+                            if content_type == "text/plain":
+                                try:
+                                    body = part.get_payload(decode=True).decode(errors='ignore')
+                                    break
+                                except:
+                                    continue
+                    else:
+                        content_type = msg.get_content_type()
+                        if content_type == "text/plain":
+                            try:
+                                body = msg.get_payload(decode=True).decode(errors='ignore')
+                            except:
+                                pass
+                    
+                    email_info['body'] = body
+                    emails_info.append(email_info)
         
-        if not accounts_to_confirm:
-            logger.info("Нет аккаунтов для подтверждения")
-            logger.info("Все аккаунты уже подтверждены или не зарегистрированы")
-            return
+        mail.close()
+        mail.logout()
         
-        logger.info(f"Найдено {len(accounts_to_confirm)} аккаунтов для подтверждения")
-        
-        # Обработка аккаунтов
-        results = []
-        for i, account in enumerate(accounts_to_confirm, 1):
-            try:
-                logger.info(f"\n{'='*50}")
-                logger.info(f"Аккаунт {i}/{len(accounts_to_confirm)}: {account['name']} ({account['email']})")
-                logger.info(f"{'='*50}")
-                
-                # Подтверждаем email
-                max_attempts = account_manager.settings.get('email_check_attempts', 3)
-                result = confirmer.process_account_confirmation(account, max_attempts)
-                results.append(result)
-                
-                # Короткая задержка между аккаунтами
-                if i < len(accounts_to_confirm):
-                    time.sleep(2)
-                
-            except Exception as e:
-                logger.error(f"Критическая ошибка для аккаунта {account['name']}: {e}")
-                results.append({
-                    'account': account,
-                    'success': False,
-                    'error': str(e)
-                })
-        
-        # Вывод результатов
-        print_confirmation_results(results)
+        print(f"Найдено {len(emails_info)} писем")
+        return emails_info
         
     except Exception as e:
-        logger.error(f"Критическая ошибка в confirm_main: {e}")
+        print(f"Ошибка проверки почты: {e}")
+        return []
 
-def print_confirmation_results(results):
-    """Вывод результатов подтверждения"""
-    logger.info("\n" + "="*60)
-    logger.info("РЕЗУЛЬТАТЫ ПОДТВЕРЖДЕНИЯ EMAIL")
-    logger.info("="*60)
+def extract_confirmation_links(email_body: str) -> list:
+    """Извлечение ссылок подтверждения"""
+    urls = re.findall(r'https?://[^\s<>"]+', email_body)
     
-    successful = 0
-    for result in results:
-        account = result['account']
-        if result.get('success'):
-            successful += 1
-            logger.info(f"✅ {account['name']} - EMAIL ПОДТВЕРЖДЕН")
-            logger.info(f"   Email: {account['email']}")
-            logger.info(f"   Найдено ссылок: {len(result.get('confirmation_links', []))}")
+    confirmation_links = []
+    for url in urls:
+        if any(keyword in url.lower() for keyword in ['confirm', 'verify', 'activation', 'activate', 'validation', 'etsy']):
+            confirmation_links.append(url)
+    
+    return confirmation_links
+
+def process_account_confirmation(account: dict) -> bool:
+    """Обработка подтверждения для одного аккаунта"""
+    print(f"\n--- Подтверждение: {account['name']} ---")
+    
+    for attempt in range(3):
+        try:
+            print(f"Попытка {attempt + 1}/3...")
             
-            for link_info in result.get('confirmation_links', []):
-                logger.info(f"     📧 {link_info['subject']}")
-                logger.info(f"     🔗 {link_info['link'][:80]}...")
-        else:
-            logger.info(f"❌ {account['name']} - ПОДТВЕРЖДЕНИЕ НЕ УДАЛОСЬ")
-            logger.info(f"   Email: {account['email']}")
-            logger.info(f"   Ошибка: {result.get('error', 'Unknown error')}")
-            logger.info(f"   Найдено писем: {result.get('emails_found', 0)}")
+            # Проверяем почту
+            emails = check_email_imap(account['email'], account['password'])
+            
+            # Ищем ссылки подтверждения
+            for email_msg in emails:
+                links = extract_confirmation_links(email_msg.get('body', ''))
+                for link in links:
+                    print(f"✅ Найдена ссылка: {email_msg['subject']}")
+                    print(f"🔗 {link}")
+                    return True
+            
+            # Ждем перед следующей попыткой
+            if attempt < 2:
+                print("Ссылки не найдены, ждем 10 сек...")
+                time.sleep(10)
+                
+        except Exception as e:
+            print(f"Ошибка: {e}")
+            if attempt < 2:
+                time.sleep(10)
     
-    logger.info(f"\nИтог подтверждения: {successful}/{len(results)} успешных подтверждений")
+    print("❌ Ссылки подтверждения не найдены")
+    return False
+
+def main():
+    """Основная функция"""
+    print("=== ПОДТВЕРЖДЕНИЕ EMAIL ===")
+    
+    results = []
+    for account in ACCOUNTS:
+        success = process_account_confirmation(account)
+        results.append(success)
+        
+        # Короткая пауза между аккаунтами
+        time.sleep(2)
+    
+    # Итоги
+    print(f"\n=== РЕЗУЛЬТАТЫ ===")
+    print(f"Подтверждено: {sum(results)}/{len(ACCOUNTS)}")
 
 if __name__ == "__main__":
     main()
