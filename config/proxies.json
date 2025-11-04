@@ -1,0 +1,15 @@
+{
+  "proxies": [
+    {
+      "host": "eu.proxys5.net",
+      "port": "6200",
+      "username": "testkuser-zone-custom-region-GB-sessid-0FLcnS8l-sessTime-120",
+      "password": "testkuser2431",
+      "region": "GB",
+      "active": true
+    }
+  ],
+  "rotation_enabled": true,
+  "timeout": 30,
+  "max_retries": 3
+}
